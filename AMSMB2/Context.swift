@@ -210,9 +210,10 @@ extension SMB2Client {
     func service(revents: Int32) throws {
         let result = smb2_service(context, revents)
         if result < 0 {
+            let errDesc = error
             smb2_destroy_context(context)
             context = nil
-            try POSIXError.throwIfError(result, description: error)
+            try POSIXError.throwIfError(result, description: errDesc)
         }
     }
 }
@@ -368,6 +369,7 @@ extension SMB2Client {
             pfd.events = try whichEvents()
 
             if pfd.fd < 0 || (poll(&pfd, 1, 1000) < 0 && errno != EAGAIN) {
+                if cb.isFinished { break }
                 throw POSIXError(.init(errno), description: error)
             }
 
@@ -378,13 +380,17 @@ extension SMB2Client {
                 continue
             }
 
-            try service(revents: Int32(pfd.revents))
+            do {
+                try service(revents: Int32(pfd.revents))
+            } catch {
+                if cb.isFinished { break }
+                throw error
+            }
         }
     }
 
     static let generic_handler: smb2_command_cb = { smb2, status, command_data, cbdata in
         do {
-            guard try smb2.unwrap().pointee.fd >= 0 else { return }
             let cbdata = try cbdata.unwrap().bindMemory(to: CBData.self, capacity: 1).pointee
             if NTStatus(rawValue: status) != .success {
                 cbdata.result = status
